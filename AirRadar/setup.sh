@@ -55,13 +55,14 @@ struct Flight: Identifiable, Equatable {
     let altitude: Double
     let velocity: Double
     let heading: Double
+    var distanceToUser: Double?
 }
 
 class FlightData: ObservableObject {
     @Published var flights: [Flight] = []
     @Published var selectedFlight: Flight?
     @Published var region = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 28.65, longitude: 77.23), // Default
+        center: CLLocationCoordinate2D(latitude: 28.65, longitude: 77.23),
         span: MKCoordinateSpan(latitudeDelta: 1.0, longitudeDelta: 1.0)
     )
     
@@ -102,7 +103,7 @@ struct FlightMarkerView: View {
                 .font(.system(size: isSelected ? 30 : 18, weight: .bold))
                 .foregroundColor(isSelected ? .yellow : .white)
                 .shadow(color: .black.opacity(0.8), radius: 3, x: 0, y: 2)
-                .rotationEffect(.degrees(flight.heading)) // Pure heading rotation
+                .rotationEffect(.degrees(flight.heading))
             
             Text(flight.callsign.isEmpty ? "Unknown" : flight.callsign)
                 .font(.system(size: isSelected ? 16 : 10, weight: .bold, design: .rounded))
@@ -114,18 +115,6 @@ struct FlightMarkerView: View {
                         .fill(isSelected ? Color.blue.opacity(0.8) : Color.black.opacity(0.6))
                 )
                 .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
-                
-            if isSelected {
-                VStack(spacing: 2) {
-                    Text("Alt: \(Int(flight.altitude))m")
-                    Text("Spd: \(Int(flight.velocity * 3.6))km/h")
-                }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundColor(.white)
-                .padding(6)
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(8)
-            }
         }
     }
 }
@@ -137,14 +126,67 @@ struct WallpaperView: View {
         Map(coordinateRegion: $flightData.region, annotationItems: flightData.flights) { flight in
             MapAnnotation(coordinate: CLLocationCoordinate2D(latitude: flight.latitude, longitude: flight.longitude)) {
                 FlightMarkerView(flight: flight, isSelected: flightData.selectedFlight?.icao24 == flight.icao24)
-                    .onTapGesture {
-                        withAnimation {
-                            flightData.selectedFlight = flight
-                        }
-                    }
             }
         }
         .edgesIgnoringSafeArea(.all)
+    }
+}
+
+struct FlightDetailsView: View {
+    let flight: Flight
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            Map(coordinateRegion: .constant(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: flight.latitude, longitude: flight.longitude),
+                span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+            )), annotationItems: [flight]) { f in
+                MapAnnotation(coordinate: CLLocationCoordinate2D(latitude: f.latitude, longitude: f.longitude)) {
+                    FlightMarkerView(flight: f, isSelected: true)
+                }
+            }
+            .frame(height: 250)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("✈️ Flight \(flight.callsign.isEmpty ? "Unknown" : flight.callsign)")
+                    .font(.title2.bold())
+                    .padding(.bottom, 4)
+                
+                HStack {
+                    Text("Origin Country:")
+                    Spacer()
+                    Text(flight.origin).bold()
+                }
+                HStack {
+                    Text("Current Altitude:")
+                    Spacer()
+                    Text("\(Int(flight.altitude)) meters").bold()
+                }
+                HStack {
+                    Text("Current Speed:")
+                    Spacer()
+                    Text("\(Int(flight.velocity * 3.6)) km/h").bold()
+                }
+                if let dist = flight.distanceToUser {
+                    HStack {
+                        Text("Distance from you:")
+                        Spacer()
+                        Text("\(String(format: "%.1f", dist / 1000.0)) km").bold()
+                            .foregroundColor(.blue)
+                    }
+                }
+                
+                Spacer()
+                Text("Note: Exact departure and destination airports are restricted by live transponders in the free tier, so Origin Country is shown.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(NSColor.controlBackgroundColor))
+        }
+        .frame(width: 400, height: 450)
     }
 }
 
@@ -157,6 +199,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, U
     
     let flightData = FlightData()
     var desktopWindow: NSWindow?
+    var detailsWindow: NSWindow?
     var wallpaperMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
@@ -204,13 +247,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, U
             desktopWindow?.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
             desktopWindow?.backgroundColor = .clear
             desktopWindow?.isOpaque = false
-            desktopWindow?.ignoresMouseEvents = false // Allow clicking on planes in wallpaper
+            desktopWindow?.ignoresMouseEvents = false
             
             let wallpaperView = WallpaperView(flightData: flightData)
             desktopWindow?.contentView = NSHostingView(rootView: wallpaperView)
             desktopWindow?.makeKeyAndOrderFront(nil)
             wallpaperMenuItem.state = .on
         }
+    }
+    
+    func showDetailsWindow(for flight: Flight) {
+        if detailsWindow == nil {
+            let rect = NSRect(x: 0, y: 0, width: 400, height: 450)
+            detailsWindow = NSWindow(contentRect: rect, styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+            detailsWindow?.title = "Flight Details"
+            detailsWindow?.isReleasedWhenClosed = false
+            detailsWindow?.center()
+            detailsWindow?.level = .floating // Stays on top
+        }
+        
+        let detailsView = FlightDetailsView(flight: flight)
+        detailsWindow?.contentView = NSHostingView(rootView: detailsView)
+        detailsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -259,11 +318,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, U
                             let velocity = state[9] as? Double ?? 0
                             let heading = state[10] as? Double ?? 0
                             
-                            let flight = Flight(icao24: icao24, callsign: callsign, origin: originCountry, latitude: fLat, longitude: fLon, altitude: altitude, velocity: velocity, heading: heading)
-                            currentFlights.append(flight)
-                            
                             let flightLoc = CLLocation(latitude: fLat, longitude: fLon)
                             let distance = location.distance(from: flightLoc)
+                            
+                            let flight = Flight(icao24: icao24, callsign: callsign, origin: originCountry, latitude: fLat, longitude: fLon, altitude: altitude, velocity: velocity, heading: heading, distanceToUser: distance)
+                            currentFlights.append(flight)
                             
                             if distance < 5000 {
                                 if !self.notifiedFlights.contains(icao24) {
@@ -308,12 +367,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, U
         if let icao24 = userInfo["icao24"] as? String {
             DispatchQueue.main.async {
                 if let flight = self.flightData.flights.first(where: { $0.icao24 == icao24 }) {
-                    self.flightData.selectedFlight = flight
-                    self.flightData.region.center = CLLocationCoordinate2D(latitude: flight.latitude, longitude: flight.longitude)
-                }
-                // Open wallpaper if not already open
-                if self.desktopWindow == nil {
-                    self.toggleWallpaper()
+                    self.showDetailsWindow(for: flight)
                 }
             }
         }
