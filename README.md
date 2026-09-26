@@ -2,6 +2,10 @@
   <img src="https://img.icons8.com/color/96/000000/radar.png" alt="AirRadar Logo" width="80"/>
   <h1>AirRadar for macOS ✈️</h1>
   <p>A native macOS menu bar app that tracks airplanes flying over your location in real-time and turns your desktop into a live radar map.</p>
+  <br/>
+  <a href="https://github.com/Thedext3r/AirRadar/raw/main/AirRadar.zip">
+    <img src="https://img.shields.io/badge/Download_for_macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" />
+  </a>
 </div>
 
 <br />
