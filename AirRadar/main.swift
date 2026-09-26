@@ -10,6 +10,7 @@ struct Flight: Identifiable, Equatable {
     let icao24: String
     let callsign: String
     let origin: String
+    let destination: String
     var latitude: Double
     var longitude: Double
     let altitude: Double
@@ -113,9 +114,14 @@ struct FlightDetailsView: View {
                     .padding(.bottom, 4)
                 
                 HStack {
-                    Text("Origin Country:")
+                    Text("Origin Airport:")
                     Spacer()
-                    Text(flight.origin).bold()
+                    Text(flight.origin.isEmpty ? "Unknown" : flight.origin).bold()
+                }
+                HStack {
+                    Text("Destination Airport:")
+                    Spacer()
+                    Text(flight.destination.isEmpty ? "Unknown" : flight.destination).bold()
                 }
                 HStack {
                     Text("Current Altitude:")
@@ -137,10 +143,6 @@ struct FlightDetailsView: View {
                 }
                 
                 Spacer()
-                Text("Note: Exact departure and destination airports are restricted by live transponders in the free tier, so Origin Country is shown.")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -257,37 +259,46 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, U
         let lomin = lon - radius
         let lomax = lon + radius
         
-        let urlString = "https://opensky-network.org/api/states/all?lamin=\(lamin)&lomin=\(lomin)&lamax=\(lamax)&lomax=\(lomax)"
+        let urlString = "https://data-cloud.flightradar24.com/zones/fcgi/feed.js?bounds=\(lamax),\(lamin),\(lomin),\(lomax)"
         guard let url = URL(string: urlString) else { return }
         
-        URLSession.shared.dataTask(with: url) { data, response, error in
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
             if let data = data {
                 do {
-                    if let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
-                       let states = json["states"] as? [[Any]] {
+                    if let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
                         
                         var currentFlights: [Flight] = []
                         
-                        for state in states {
-                            let icao24 = state[0] as? String ?? "Unknown"
-                            let callsign = (state[1] as? String)?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
-                            let originCountry = state[2] as? String ?? "Unknown"
-                            let fLon = state[5] as? Double ?? 0
-                            let fLat = state[6] as? Double ?? 0
-                            let altitude = state[7] as? Double ?? 0
-                            let velocity = state[9] as? Double ?? 0
-                            let heading = state[10] as? Double ?? 0
-                            
-                            let flightLoc = CLLocation(latitude: fLat, longitude: fLon)
-                            let distance = location.distance(from: flightLoc)
-                            
-                            let flight = Flight(icao24: icao24, callsign: callsign, origin: originCountry, latitude: fLat, longitude: fLon, altitude: altitude, velocity: velocity, heading: heading, distanceToUser: distance)
-                            currentFlights.append(flight)
-                            
-                            if distance < 5000 {
-                                if !self.notifiedFlights.contains(icao24) {
-                                    self.notifiedFlights.insert(icao24)
-                                    self.sendNotification(flight: flight)
+                        for (key, value) in json {
+                            if key == "full_count" || key == "version" { continue }
+                            if let state = value as? [Any], state.count >= 13 {
+                                let icao24 = state[0] as? String ?? key
+                                let fLat = state[1] as? Double ?? 0
+                                let fLon = state[2] as? Double ?? 0
+                                let heading = (state[3] as? NSNumber)?.doubleValue ?? 0
+                                let altitudeFt = (state[4] as? NSNumber)?.doubleValue ?? 0
+                                let altitude = altitudeFt * 0.3048 // convert feet to meters
+                                let velocityKts = (state[5] as? NSNumber)?.doubleValue ?? 0
+                                let velocity = velocityKts * 0.514444 // convert knots to m/s
+                                
+                                let origin = state[11] as? String ?? ""
+                                let destination = state[12] as? String ?? ""
+                                let callsign = (state[16] as? String)?.trimmingCharacters(in: .whitespaces) ?? "Unknown"
+                                
+                                let flightLoc = CLLocation(latitude: fLat, longitude: fLon)
+                                let distance = location.distance(from: flightLoc)
+                                
+                                let flight = Flight(icao24: icao24, callsign: callsign, origin: origin, destination: destination, latitude: fLat, longitude: fLon, altitude: altitude, velocity: velocity, heading: heading, distanceToUser: distance)
+                                currentFlights.append(flight)
+                                
+                                if distance < 5000 {
+                                    if !self.notifiedFlights.contains(icao24) {
+                                        self.notifiedFlights.insert(icao24)
+                                        self.sendNotification(flight: flight)
+                                    }
                                 }
                             }
                         }
@@ -310,7 +321,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, U
         let content = UNMutableNotificationContent()
         content.title = "Airplane Nearby! ✈️"
         let name = flight.callsign.isEmpty || flight.callsign == "Unknown" ? "An airplane" : "Flight \(flight.callsign)"
-        content.body = "\(name) from \(flight.origin) is passing by your location."
+        
+        var bodyText = "\(name) is passing by your location."
+        if !flight.origin.isEmpty && !flight.destination.isEmpty {
+            bodyText = "\(name) from \(flight.origin) to \(flight.destination) is passing by your location."
+        } else if !flight.origin.isEmpty {
+            bodyText = "\(name) from \(flight.origin) is passing by your location."
+        } else if !flight.destination.isEmpty {
+            bodyText = "\(name) heading to \(flight.destination) is passing by your location."
+        }
+        
+        content.body = bodyText
         content.sound = UNNotificationSound.default
         content.userInfo = ["icao24": flight.icao24]
         
